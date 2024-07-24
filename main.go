@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 )
 
 const defaultListenAddr = "127.0.0.1:7788" // Default listening address for health checks
@@ -30,19 +32,26 @@ func NewManager() *Manager {
 
 // AddProcess adds a process to be managed, supports alias and command
 func (m *Manager) AddProcess(name string, command string) {
-	// Split the command into executable and arguments
-	parts := strings.Fields(command)
-	if len(parts) == 0 {
-		log.Fatalf("No command provided for process %s", name)
-	}
+	var cmd *exec.Cmd
 
-	// The first part is the executable, the rest are arguments
-	executable := parts[0]
-	args := parts[1:]
+	// Check if `sh` is available
+	if _, err := exec.LookPath("sh"); err == nil {
+		// Try using sh -c to execute the command
+		cmd = exec.Command("sh", "-c", command)
+	} else {
+		log.Printf("Using regular command execution for %s", name)
+
+		// Split the command into executable and arguments
+		parts := strings.Fields(command)
+		if len(parts) == 0 {
+			log.Fatalf("No command provided for process %s", name)
+		}
+		cmd = exec.Command(parts[0], parts[1:]...)
+	}
 
 	m.processes = append(m.processes, &Process{
 		Name: name,
-		Cmd:  exec.Command(executable, args...), // Execute command directly
+		Cmd:  cmd,
 	})
 }
 
@@ -169,6 +178,17 @@ func main() {
 
 	// Run the HTTP server for health checks
 	go RunHTTPServer(listenAddr, mgr)
+
+	// Set up signal handling for graceful shutdown
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-sigs
+		log.Println("Received interrupt signal, shutting down gracefully...")
+		mgr.Wait() // Wait for all processes to finish
+		os.Exit(0) // Exit normally
+	}()
 
 	// Wait for termination signal (e.g., Ctrl+C)
 	mgr.Wait()
