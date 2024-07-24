@@ -9,6 +9,8 @@ jobs:
   release:
     name: release publish
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: set up go
         uses: actions/setup-go@v3
