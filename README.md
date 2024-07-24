@@ -1,6 +1,8 @@
 # God
 
-## Overview
+[简体中文](./README_zh.md)
+
+## Overview 
 
 God is a lightweight process management tool written in Go. It allows you to start and manage multiple processes simultaneously, supporting health checks and optional aliases for each service. This tool is particularly useful in containerized environments where monitoring and managing services are crucial.
 
