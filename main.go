@@ -30,13 +30,22 @@ func NewManager() *Manager {
 
 // AddProcess adds a process to be managed, supports alias and command
 func (m *Manager) AddProcess(name string, command string) {
+	// Split the command into executable and arguments
+	parts := strings.Fields(command)
+	if len(parts) == 0 {
+		log.Fatalf("No command provided for process %s", name)
+	}
+
+	// The first part is the executable, the rest are arguments
+	executable := parts[0]
+	args := parts[1:]
+
 	m.processes = append(m.processes, &Process{
 		Name: name,
-		Cmd:  exec.Command(command), // Directly execute the command without a shell
+		Cmd:  exec.Command(executable, args...), // Execute command directly
 	})
 }
 
-// Start initiates all managed processes
 func (m *Manager) Start() error {
 	for _, proc := range m.processes {
 		m.wg.Add(1)
@@ -64,7 +73,6 @@ func (m *Manager) Start() error {
 	return nil
 }
 
-// Wait blocks until all processes have finished
 func (m *Manager) Wait() {
 	log.Println("Waiting for processes to finish...")
 	m.wg.Wait()
@@ -123,8 +131,8 @@ func main() {
 	var listenAddr string
 
 	// Define command line flags
-	flag.Var(&commands, "c", "Command to start the service in the format 'alias:command' or 'command'") // Allow multiple -c flags
-	flag.StringVar(&listenAddr, "l", defaultListenAddr, "Address to listen for health checks")          // Default to ":7788"
+	flag.Var(&commands, "c", "Command to start the service in the format '[alias:]command', allowing multiple -c flags")
+	flag.StringVar(&listenAddr, "l", defaultListenAddr, "Address to listen for health checks")
 	flag.Parse()
 
 	if len(commands) == 0 {
