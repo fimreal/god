@@ -11,7 +11,7 @@ import (
 	"sync"
 )
 
-const defaultListenAddr = ":7788" // Default listening address for health checks
+const defaultListenAddr = "127.0.0.1:7788" // Default listening address for health checks
 
 type Process struct {
 	Name  string    // Alias for the process
