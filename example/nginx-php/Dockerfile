@@ -1,11 +1,11 @@
 # go build
-FROM golang:1.21 AS builder
-RUN git clone https://github.com/fimreal/god.git /god &&\
-    cd /god &&\
-    CGO_ENABLED=0 GOOS=linux go build -ldflags '-s -w' -o god .
-    # CGO_ENABLED=0 GOOS=linux go build -o god .
+#FROM golang:1.21 AS builder
+#RUN git clone https://github.com/fimreal/god.git /god &&\
+#    cd /god &&\
+#    CGO_ENABLED=0 GOOS=linux go build -ldflags '-s -w' -o god .
+# or CGO_ENABLED=0 GOOS=linux go build -o god .
 
-# openresty & php 
+# openresty & php
 FROM openresty/openresty:alpine
 
 # Motify timezone as needed
@@ -29,8 +29,12 @@ RUN apk add --no-cache php-fpm php-pdo_mysql php-tokenizer \
 ADD ./nginx.conf /etc/nginx/conf.d/nginx.conf
 
 # Copy god bin command
-COPY --from=builder /god/god /god
+# COPY --from=builder /god/god /god
+COPY --from=epurs/god:latest /god /god
 CMD ["/god", "-c", "nginx:openresty -g 'daemon off;'", "-c", "/usr/sbin/php-fpm83 --nodaemonize"]
 
-EXPOSE 80
+# health check, optional
+HEALTHCHECK --interval=5s --timeout=2s --retries=3 CMD curl -f http://localhost:7788/health || exit 1
+
+EXPOSE 80 7788
 VOLUME ["/wwwroot"]
