@@ -2,6 +2,8 @@
 
 [English](./README.md)
 
+[![god](https://github.com/fimreal/god/actions/workflows/release_build.yaml/badge.svg)](https://github.com/fimreal/god/actions/workflows/release_build.yaml)
+
 ## 概述
 
 God 是一个轻量级的进程管理工具，使用 Go 语言编写。它允许您同时启动和管理多个进程，并支持健康检查以及为每个服务指定可选别名，该工具在容器化环境中尤其有用。
