@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-utils
+  namespace: tools
+  labels:
+    app: web-utils
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web-utils
+  strategy: {}
+  template:
+    metadata:
+      labels:
+        app: web-utils
+      namespace: tools
+    spec:
+      containers:
+      - env:
+        - name: TZ
+          value: Asia/Shanghai
+        image: docke.io/epurs/web-utils:latest
+        imagePullPolicy: Always
+        name: web-utils
+        ports:
+        - containerPort: 80
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 7788
+          initialDelaySeconds: 5
+          periodSeconds: 15
+          timeoutSeconds: 4
+          failureThreshold: 2
+        resources:
+          limits:
+            cpu: 100m
+            memory: 300Mi
+          requests:
+            cpu: 10m
+            memory: 150Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-utils
+  labels:
+    app: web-utils
+  namespace: tools
+spec:
+  ports:
+  - port: 80
+    targetPort: 80
+  selector:
+    app: web-utils
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web-utils
+  namespace: tools
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: "web-utils.epurs.com"
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: web-utils
+            port:
+              number: 80
+  tls:
+  - secretName: epurs-com
+    hosts:
+    - web-utils.epurs.com
