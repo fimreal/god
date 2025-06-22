@@ -100,23 +100,20 @@ func (pw *prefixedWriter) Write(p []byte) (n int, err error) {
 
 	// Split by newlines and prefix each line
 	lines := strings.Split(string(p), "\n")
+	totalWritten := 0
 
-	for i, line := range lines {
-		if i > 0 && i < len(lines)-1 {
-			// Add newline for all lines except the first and last
-			line = "\n" + line
-		}
-
+	for _, line := range lines {
 		if line != "" {
-			prefixedLine := fmt.Sprintf("[%s] %s", pw.name, line)
-			if _, err := pw.writer.Write([]byte(prefixedLine)); err != nil {
-				return n, err
+			prefixedLine := fmt.Sprintf("[%s] %s\n", pw.name, line)
+			written, err := pw.writer.Write([]byte(prefixedLine))
+			if err != nil {
+				return totalWritten, err
 			}
+			totalWritten += written
 		}
-		n += len(line)
 	}
 
-	return n, nil
+	return len(p), nil
 }
 
 func (m *Manager) Start() error {
