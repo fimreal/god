@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -15,23 +16,45 @@ import (
 	"syscall"
 )
 
+const defaultListenAddr = "127.0.0.1:7788" // 默认开启健康检查，设为空字符串可关闭
+
+type TaskType int
+
+const (
+	TaskTypeInit    TaskType = iota // One-time initialization task
+	TaskTypeService                 // Long-running service
+)
+
 type Process struct {
-	Name  string    // Alias for the process
-	Cmd   *exec.Cmd // Command to execute
-	Alive bool      // Used to track whether the process is alive
+	Name     string     // Alias for the process
+	Cmd      *exec.Cmd  // Command to execute
+	Alive    bool       // Used to track whether the process is alive
+	Command  string     // Original command string
+	Type     TaskType   // Task type (init or service)
+	ExitCode int        // Exit code for init tasks
+	Success  bool       // Whether init task completed successfully
+	mu       sync.Mutex // Protect status operations
 }
 
 type Manager struct {
 	processes []*Process
 	wg        sync.WaitGroup
+	ctx       context.Context
+	cancel    context.CancelFunc
+	initDone  chan struct{} // Signal when all init tasks are done
 }
 
 func NewManager() *Manager {
-	return &Manager{}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Manager{
+		ctx:      ctx,
+		cancel:   cancel,
+		initDone: make(chan struct{}),
+	}
 }
 
 // AddProcess adds a process to be managed, supports alias and command
-func (m *Manager) AddProcess(name string, command string) {
+func (m *Manager) AddProcess(name string, command string, taskType TaskType) {
 	var cmd *exec.Cmd
 
 	// Check if `sh` is available
@@ -50,8 +73,10 @@ func (m *Manager) AddProcess(name string, command string) {
 	}
 
 	m.processes = append(m.processes, &Process{
-		Name: name,
-		Cmd:  cmd,
+		Name:    name,
+		Cmd:     cmd,
+		Command: command,
+		Type:    taskType,
 	})
 }
 
@@ -95,34 +120,138 @@ func (pw *prefixedWriter) Write(p []byte) (n int, err error) {
 }
 
 func (m *Manager) Start() error {
+	// First, start all init tasks
+	initWg := sync.WaitGroup{}
+	initTasks := []*Process{}
+	serviceTasks := []*Process{}
+
+	// Separate init tasks and service tasks
 	for _, proc := range m.processes {
-		m.wg.Add(1)
+		if proc.Type == TaskTypeInit {
+			initTasks = append(initTasks, proc)
+		} else {
+			serviceTasks = append(serviceTasks, proc)
+		}
+	}
 
-		// Create prefixed writers for stdout and stderr
-		proc.Cmd.Stdout = createPrefixedWriter(proc.Name, os.Stdout)
-		proc.Cmd.Stderr = createPrefixedWriter(proc.Name, os.Stderr)
+	// Start init tasks first
+	if len(initTasks) > 0 {
+		log.Println("Starting initialization tasks...")
+		for _, proc := range initTasks {
+			initWg.Add(1)
+			go m.runInitTask(proc, &initWg)
+		}
+		initWg.Wait()
 
-		log.Printf("[%s] Starting process", proc.Name)
-		if err := proc.Cmd.Start(); err != nil {
-			log.Printf("[%s] Failed to start process: %v", proc.Name, err)
-			return fmt.Errorf("failed to start process %s: %w", proc.Name, err)
+		// Check if all init tasks succeeded
+		allInitSuccess := true
+		for _, proc := range initTasks {
+			proc.mu.Lock()
+			if !proc.Success {
+				allInitSuccess = false
+				log.Printf("[%s] Init task failed with exit code %d", proc.Name, proc.ExitCode)
+			}
+			proc.mu.Unlock()
 		}
 
-		proc.Alive = true // Mark as started
-		log.Printf("[%s] Process started successfully", proc.Name)
+		if !allInitSuccess {
+			log.Println("Some initialization tasks failed, not starting services")
+			close(m.initDone)
+			return fmt.Errorf("initialization tasks failed")
+		}
+		log.Println("All initialization tasks completed successfully")
+	}
 
-		go func(p *Process) {
-			defer m.wg.Done()
-			if err := p.Cmd.Wait(); err != nil {
-				log.Printf("[%s] Process exited with error: %v", p.Name, err)
-			} else {
-				log.Printf("[%s] Process exited successfully", p.Name)
-			}
-			p.Alive = false // Update alive status
-		}(proc)
+	// Signal that init is done
+	close(m.initDone)
+
+	// Start service tasks
+	if len(serviceTasks) > 0 {
+		log.Println("Starting service tasks...")
+		for _, proc := range serviceTasks {
+			m.wg.Add(1)
+			go m.runServiceTask(proc)
+		}
 	}
 
 	return nil
+}
+
+// runInitTask runs a one-time initialization task
+func (m *Manager) runInitTask(proc *Process, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	stdout := createPrefixedWriter(proc.Name, os.Stdout)
+	stderr := createPrefixedWriter(proc.Name, os.Stderr)
+	proc.Cmd.Stdout = stdout
+	proc.Cmd.Stderr = stderr
+
+	log.Printf("[%s] Starting init task", proc.Name)
+	if err := proc.Cmd.Start(); err != nil {
+		log.Printf("[%s] Failed to start init task: %v", proc.Name, err)
+		proc.mu.Lock()
+		proc.Success = false
+		proc.ExitCode = -1
+		proc.mu.Unlock()
+		return
+	}
+
+	proc.Alive = true
+	log.Printf("[%s] Init task started successfully", proc.Name)
+
+	// Wait for init task to complete
+	if err := proc.Cmd.Wait(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			proc.mu.Lock()
+			proc.ExitCode = exitErr.ExitCode()
+			proc.Success = (proc.ExitCode == 0)
+			proc.mu.Unlock()
+			log.Printf("[%s] Init task completed with exit code %d", proc.Name, proc.ExitCode)
+		} else {
+			proc.mu.Lock()
+			proc.Success = false
+			proc.ExitCode = -1
+			proc.mu.Unlock()
+			log.Printf("[%s] Init task failed: %v", proc.Name, err)
+		}
+	} else {
+		proc.mu.Lock()
+		proc.ExitCode = 0
+		proc.Success = true
+		proc.mu.Unlock()
+		log.Printf("[%s] Init task completed successfully", proc.Name)
+	}
+
+	proc.Alive = false
+}
+
+// runServiceTask runs a long-running service
+func (m *Manager) runServiceTask(proc *Process) {
+	defer m.wg.Done()
+
+	stdout := createPrefixedWriter(proc.Name, os.Stdout)
+	stderr := createPrefixedWriter(proc.Name, os.Stderr)
+	proc.Cmd.Stdout = stdout
+	proc.Cmd.Stderr = stderr
+
+	log.Printf("[%s] Starting service", proc.Name)
+	if err := proc.Cmd.Start(); err != nil {
+		log.Printf("[%s] Failed to start service: %v", proc.Name, err)
+		proc.Alive = false
+		return
+	}
+
+	proc.Alive = true
+	log.Printf("[%s] Service started successfully", proc.Name)
+
+	// Wait for service to exit
+	if err := proc.Cmd.Wait(); err != nil {
+		log.Printf("[%s] Service exited with error: %v", proc.Name, err)
+	} else {
+		log.Printf("[%s] Service exited successfully", proc.Name)
+	}
+
+	proc.Alive = false
 }
 
 func (m *Manager) Wait() {
@@ -131,18 +260,54 @@ func (m *Manager) Wait() {
 	log.Println("All processes have finished.")
 }
 
+// Shutdown gracefully shuts down all processes
+func (m *Manager) Shutdown() {
+	log.Println("Shutting down all processes...")
+	m.cancel()
+	m.wg.Wait()
+}
+
 // HealthCheckHandler returns health check status including each service's status
 func (m *Manager) HealthCheckHandler(w http.ResponseWriter, r *http.Request) {
 	response := "Health Check:\n"
 	allHealthy := true
 
-	for _, proc := range m.processes {
-		if !proc.Alive {
-			response += proc.Name + ": Unhealthy\n"
-			allHealthy = false
-		} else {
-			response += proc.Name + ": Healthy\n"
+	// If no processes, return healthy
+	if len(m.processes) == 0 {
+		response += "No processes configured\n"
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(response))
+		return
+	}
+
+	// Check if init tasks are still running
+	select {
+	case <-m.initDone:
+		// Init tasks completed, check service status
+		for _, proc := range m.processes {
+			if proc.Type == TaskTypeService {
+				if !proc.Alive {
+					response += proc.Name + ": Unhealthy\n"
+					allHealthy = false
+				} else {
+					response += proc.Name + ": Healthy\n"
+				}
+			} else {
+				// For init tasks, check if they succeeded
+				proc.mu.Lock()
+				if proc.Success {
+					response += proc.Name + ": Completed\n"
+				} else {
+					response += proc.Name + ": Failed\n"
+					allHealthy = false
+				}
+				proc.mu.Unlock()
+			}
 		}
+	default:
+		// Init tasks still running
+		response += "Initialization in progress...\n"
+		allHealthy = false
 	}
 
 	if allHealthy {
@@ -180,44 +345,65 @@ func (ss *StringSlice) Set(value string) error {
 
 func main() {
 	var commands StringSlice
+	var initCommands StringSlice
 	var listenAddr string
 
 	// Define command line flags
 	flag.Var(&commands, "c", "Command to start the service in the format '[alias:]command', allowing multiple -c flags")
-	flag.StringVar(&listenAddr, "l", "127.0.0.1:7788", "Address to listen for health checks (empty to disable)")
+	flag.Var(&initCommands, "i", "One-time initialization command in the format '[alias:]command', allowing multiple -i flags")
+	flag.StringVar(&listenAddr, "l", defaultListenAddr, "Address to listen for health checks (empty to disable)")
 	flag.Parse()
 
-	if len(commands) == 0 {
+	if len(commands) == 0 && len(initCommands) == 0 {
 		log.Fatal("No commands provided.")
 	}
 
 	mgr := NewManager()
 
-	for i, cmdStr := range commands {
+	// Add init tasks first
+	for i, cmdStr := range initCommands {
 		if cmdStr != "" {
-			// Split the input into alias and command
 			parts := strings.SplitN(cmdStr, ":", 2)
 			var alias string
 			var command string
 
 			if len(parts) == 2 {
-				// User provided an alias
 				alias = strings.TrimSpace(parts[0])
 				command = strings.TrimSpace(parts[1])
 			} else {
-				// No alias provided, auto-generate one
-				alias = "app" + strconv.Itoa(i+1)     // Auto-generate alias like app1, app2
-				command = strings.TrimSpace(parts[0]) // Use the whole string as command
+				alias = "init" + strconv.Itoa(i+1)
+				command = strings.TrimSpace(parts[0])
 			}
 
-			log.Printf("Adding process: %s -> %s", alias, command)
-			mgr.AddProcess(alias, command) // Add the process
+			log.Printf("Adding init task: %s -> %s", alias, command)
+			mgr.AddProcess(alias, command, TaskTypeInit)
+		}
+	}
+
+	// Add service tasks
+	for i, cmdStr := range commands {
+		if cmdStr != "" {
+			parts := strings.SplitN(cmdStr, ":", 2)
+			var alias string
+			var command string
+
+			if len(parts) == 2 {
+				alias = strings.TrimSpace(parts[0])
+				command = strings.TrimSpace(parts[1])
+			} else {
+				alias = "app" + strconv.Itoa(i+1)
+				command = strings.TrimSpace(parts[0])
+			}
+
+			log.Printf("Adding service: %s -> %s", alias, command)
+			mgr.AddProcess(alias, command, TaskTypeService)
 		}
 	}
 
 	// Start the manager
 	if err := mgr.Start(); err != nil {
-		log.Fatalf("Failed to start manager: %v", err)
+		log.Printf("Manager start failed: %v", err)
+		// Don't exit immediately, let health check show the status
 	}
 
 	// Run the HTTP server for health checks only if listenAddr is provided
@@ -235,8 +421,8 @@ func main() {
 	go func() {
 		<-sigs
 		log.Println("Received interrupt signal, shutting down gracefully...")
-		mgr.Wait() // Wait for all processes to finish
-		os.Exit(0) // Exit normally
+		mgr.Shutdown() // Use new shutdown method
+		os.Exit(0)     // Exit normally
 	}()
 
 	// Wait for termination signal (e.g., Ctrl+C)

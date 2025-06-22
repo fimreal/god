@@ -6,16 +6,18 @@
 
 ## Overview 
 
-God is a lightweight process management tool written in Go. It allows you to start and manage multiple processes simultaneously, supporting health checks and optional aliases for each service. This tool is particularly useful in containerized environments where monitoring and managing services are crucial.
+God is a lightweight process management tool written in Go. It allows you to start and manage multiple processes simultaneously, supporting health checks, startup order, and optional aliases for each service. This tool is particularly useful in containerized environments where monitoring and managing services are crucial.
 
 ## Features
 
-- **Lightweight and Simple**: Designed to be minimalistic with no unnecessary overhead, making it easy to use and deploy.
-- **Start and Manage Multiple Processes Simultaneously**: Launch and control several processes at once without additional complexity.
-- **Optional Aliases for Easy Identification**: Assign custom aliases to your processes for better organization; automatically generate aliases if none are provided.
-- **HTTP Health Checks**: Monitor the status of running services through simple HTTP requests, ensuring that your applications are functioning correctly.
-- **Flexible Configuration**: Easily adjust settings such as the health check listening address using command-line options.
-- **Made for Docker**: Designed to work seamlessly with Docker containers, making it easy to manage services in a containerized environment.
+- **Lightweight and Simple**: Minimalistic, easy to use and deploy.
+- **Start and Manage Multiple Processes**: Launch and control several processes at once.
+- **Startup Order & Init Jobs**: Support for one-time initialization jobs (`-i`), service processes (`-c`) start only after all initialization tasks succeed.
+- **No Auto-Restart**: No automatic process restart, recommend using Docker/K8s for restart control.
+- **HTTP Health Checks**: `/health` endpoint reflects status of all processes and initialization tasks, suitable for container probes.
+- **Flexible Configuration**: Health check port enabled by default (127.0.0.1:7788), can be disabled with `-l ""`.
+- **Graceful Shutdown**: Supports graceful shutdown.
+- **Made for Containers**: Naturally adapts to container environments.
 
 ## Installation
 
@@ -25,46 +27,46 @@ Ensure that you have Go installed on your machine. You can download it from the 
 
 ### Build the Application
 
-1. Clone the repository:
-
-   ```bash
-   git clone https://github.com/fimreal/god.git
-   cd god
-   ```
-
-2. Build the application:
-
-   ```bash
-   go build -o god .
-   ```
+```bash
+git clone https://github.com/fimreal/god.git
+cd god
+go build -o god .
+```
 
 ## Usage
 
-### Command Format
-
-You can run the `god` executable with the following command-line options:
+### Start Services and Initialization Tasks
 
 ```bash
-god -l ":7788" -c "alias:command --arg1 value" -c "alias:command2 subcommand --arg1 value"
+god -i "initdb:./init_db.sh" -c "nginx:/usr/sbin/nginx -g 'daemon off;'" -c "php:php-fpm"
 ```
-
-- **alias**: (Optional) The service alias for easier identification.
+- `-i`: One-time initialization tasks, service processes (`-c`) start only after all init tasks succeed.
+- `-c`: Long-running service processes.
 
 ### Health Check
 
-God provides a health check endpoint at `/health`. You can use `curl` or any HTTP client to check the health status of the services:
+- Default listening on `127.0.0.1:7788`, can be disabled with `-l ""`.
+- Health check endpoint: `/health`
 
 ```bash
 curl http://localhost:7788/health
 ```
 
-This will return the health status of all managed services:
-
+Response example:
 ```
 Health Check:
-app1: Healthy
-app2: Unhealthy
+initdb: Completed
+nginx: Healthy
+php: Healthy
 ```
+
+## Changelog
+
+- 2024-06-22
+  - Support for one-time initialization tasks (`-i`) and startup order control
+  - Enhanced health check interface, supports healthy status when no processes configured
+  - Health check enabled by default, can be disabled with `-l ""`
+  - No automatic process restart, recommend using Docker/K8s for restart control
 
 ## License
 

@@ -43,7 +43,7 @@ func TestPrefixedWriter(t *testing.T) {
 func TestHealthCheckHandler(t *testing.T) {
 	mgr := NewManager()
 
-	// Test empty processes
+	// Test empty processes - should return 200 since no init tasks are running
 	req, _ := http.NewRequest("GET", "/health", nil)
 	w := httptest.NewRecorder()
 	mgr.HealthCheckHandler(w, req)
@@ -52,27 +52,44 @@ func TestHealthCheckHandler(t *testing.T) {
 		t.Errorf("Expected status 200 for empty processes, got %d", w.Code)
 	}
 
-	// Test with healthy processes
+	// Test with healthy services (no init tasks)
 	mgr.processes = []*Process{
-		{Name: "app1", Alive: true},
-		{Name: "app2", Alive: true},
+		{Name: "app1", Alive: true, Type: TaskTypeService},
+		{Name: "app2", Alive: true, Type: TaskTypeService},
 	}
+
+	// Signal that init is done
+	close(mgr.initDone)
 
 	w = httptest.NewRecorder()
 	mgr.HealthCheckHandler(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Errorf("Expected status 200 for healthy processes, got %d", w.Code)
+		t.Errorf("Expected status 200 for healthy services, got %d", w.Code)
 	}
 
-	// Test with unhealthy processes
+	// Test with unhealthy services
 	mgr.processes[1].Alive = false
 
 	w = httptest.NewRecorder()
 	mgr.HealthCheckHandler(w, req)
 
 	if w.Code != http.StatusInternalServerError {
-		t.Errorf("Expected status 500 for unhealthy processes, got %d", w.Code)
+		t.Errorf("Expected status 500 for unhealthy services, got %d", w.Code)
+	}
+
+	// Test with failed init task
+	mgr2 := NewManager()
+	mgr2.processes = []*Process{
+		{Name: "init1", Success: false, Type: TaskTypeInit},
+	}
+	close(mgr2.initDone)
+
+	w = httptest.NewRecorder()
+	mgr2.HealthCheckHandler(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("Expected status 500 for failed init task, got %d", w.Code)
 	}
 }
 
@@ -100,7 +117,7 @@ func TestStringSlice(t *testing.T) {
 func TestNewManager(t *testing.T) {
 	mgr := NewManager()
 	if mgr == nil {
-		t.Error("NewManager returned nil")
+		t.Fatal("NewManager returned nil")
 	}
 	if len(mgr.processes) != 0 {
 		t.Error("New manager should have empty processes slice")
