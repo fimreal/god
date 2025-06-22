@@ -55,10 +55,21 @@ curl http://localhost:7788/health
 Response example:
 ```
 Health Check:
-initdb: Completed
-nginx: Healthy
-php: Healthy
+initdb: Completed (ExitCode=0)
+nginx: Healthy (ExitCode=0)
+php: Healthy (ExitCode=0)
 ```
+
+- Each line shows the process name, status, and the last exit code (ExitCode).
+- For failed or exited processes, ExitCode will reflect the actual exit code.
+
+#### Command Line Arguments
+- `-i`  One-time initialization task(s), e.g. `-i "initdb:./init_db.sh"`
+- `-c`  Service process(es), e.g. `-c "nginx:/usr/sbin/nginx -g 'daemon off;'"`
+- `-l`  Health check listen address, default `127.0.0.1:7788`, set to empty to disable
+- `-d`  Enable debug logging (optional)
+
+> **Note:** Only when the colon (`:`) appears before any space in the string, it will be treated as an alias separator. Otherwise, the whole string is treated as the command.
 
 ## Changelog
 

@@ -41,7 +41,7 @@ func TestPrefixedWriter(t *testing.T) {
 }
 
 func TestHealthCheckHandler(t *testing.T) {
-	mgr := NewManager()
+	mgr := NewManager(false)
 
 	// Test empty processes - should return 200 since no init tasks are running
 	req, _ := http.NewRequest("GET", "/health", nil)
@@ -79,7 +79,7 @@ func TestHealthCheckHandler(t *testing.T) {
 	}
 
 	// Test with failed init task
-	mgr2 := NewManager()
+	mgr2 := NewManager(false)
 	mgr2.processes = []*Process{
 		{Name: "init1", Success: false, Type: TaskTypeInit},
 	}
@@ -115,7 +115,7 @@ func TestStringSlice(t *testing.T) {
 }
 
 func TestNewManager(t *testing.T) {
-	mgr := NewManager()
+	mgr := NewManager(false)
 	if mgr == nil {
 		t.Fatal("NewManager returned nil")
 	}

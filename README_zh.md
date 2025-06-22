@@ -55,10 +55,21 @@ curl http://localhost:7788/health
 返回示例：
 ```
 Health Check:
-initdb: Completed
-nginx: Healthy
-php: Healthy
+initdb: Completed (ExitCode=0)
+nginx: Healthy (ExitCode=0)
+php: Healthy (ExitCode=0)
 ```
+
+- 每行显示进程名、状态和最后一次退出码（ExitCode）。
+- 对于失败或已退出的进程，ExitCode 会反映实际退出码。
+
+#### 命令行参数说明
+- `-i`  一次性初始化任务，如 `-i "initdb:./init_db.sh"`
+- `-c`  服务进程，如 `-c "nginx:/usr/sbin/nginx -g 'daemon off;'"`
+- `-l`  健康检查监听地址，默认 `127.0.0.1:7788`，设为空关闭
+- `-d`  启用 debug 日志（可选）
+
+> **注意：** 只有当冒号（`:`）出现在第一个空格前时，才会被识别为别名分隔符，否则整个字符串都作为命令。
 
 ## 更新日志
 
